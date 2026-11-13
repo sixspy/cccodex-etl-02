@@ -126,7 +126,71 @@ button.ghost {
 }
 .tag.ok { background: #cfe8da; color: var(--ok); }
 .tag.warn { background: #ffe6a8; color: var(--warn); }
+.tag.bad { background: #f3c6b8; color: #9b1c1c; }
 .actions { display: flex; gap: 0.5rem; margin-top: 0.9rem; flex-wrap: wrap; }
 .kv { margin: 0.35rem 0; }
 .kv b { display: inline-block; min-width: 5.5rem; color: var(--muted); font-weight: 600; }
 .empty { color: var(--muted); padding: 1rem 0; }
+
+/* 清洗闸总览条 */
+.strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+}
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.55rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.stat b { font-size: 1.25rem; color: var(--accent); }
+.stat span { color: var(--muted); font-size: 0.82rem; }
+@media (max-width: 860px) {
+  .strip { grid-template-columns: repeat(2, 1fr); }
+}
+
+.counts { font-size: 0.78rem; color: var(--muted); margin-top: 0.15rem; }
+.gate-msg { color: #9b1c1c; margin-top: 0.6rem; }
+
+/* 规则设置 */
+select, textarea {
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font-family: var(--font);
+}
+textarea { width: 100%; margin: 0.5rem 0; }
+.radio { display: block; margin-bottom: 0.4rem; font-size: 0.9rem; }
+.radio input { display: inline; width: auto; margin: 0 0.4rem 0 0; }
+.policy-form { margin: 0.6rem 0; }
+
+/* 脏数据详情：隔离筐 / 已丢弃 / 事件 */
+.panel h3 { margin: 0.9rem 0 0.4rem; font-size: 0.95rem; }
+.qrow {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 0.45rem 0.6rem;
+  margin-bottom: 0.45rem;
+}
+.qrow.dropped { opacity: 0.85; display: flex; gap: 0.6rem; align-items: center; }
+.qhead { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+.reason { color: #9b1c1c; font-size: 0.85rem; }
+.fixline { display: flex; gap: 0.4rem; margin-top: 0.4rem; align-items: center; }
+.fixline input { display: inline-block; width: auto; margin-top: 0; flex: 1; }
+.fixline .amt { max-width: 7rem; flex: none; }
+.evt {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.3rem 0;
+  border-bottom: 1px dashed var(--line);
+  font-size: 0.85rem;
+  flex-wrap: wrap;
+}

@@ -7,7 +7,18 @@ from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, URLSafeSerializer
 
 from app.config import Config
-from app.db import get_db, get_pipeline, init_db, list_pipelines, run_extract, run_load
+from app.db import (
+    fix_row,
+    get_db,
+    init_db,
+    list_pipelines,
+    pipeline_detail,
+    policy_view,
+    run_clean,
+    run_extract,
+    run_load,
+    set_policy,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -33,6 +44,18 @@ def require_user(request: Request) -> str:
     if user != Config.ADMIN_USER:
         raise HTTPException(status_code=401, detail="未登录")
     return user
+
+
+def _gate_response(item, err):
+    """闸口动作统一回包：成功给管道，被拦给错误与最新状态。"""
+    if item is None:
+        raise HTTPException(status_code=404, detail="管道不存在")
+    if err:
+        code, msg = err
+        return JSONResponse(
+            {"ok": False, "error": msg, "item": item}, status_code=code
+        )
+    return item
 
 
 @app.on_event("startup")
@@ -97,28 +120,74 @@ def api_pipelines(user: str = Depends(require_user)):
 @app.get("/api/pipelines/{pipeline_id}")
 def api_pipeline_detail(pipeline_id: int, user: str = Depends(require_user)):
     with get_db() as conn:
-        item = get_pipeline(conn, pipeline_id)
+        item = pipeline_detail(conn, pipeline_id)
     if not item:
         raise HTTPException(status_code=404, detail="管道不存在")
     return item
+
+
+@app.get("/api/policy")
+def api_get_policy(user: str = Depends(require_user)):
+    with get_db() as conn:
+        return policy_view(conn)
+
+
+@app.post("/api/policy")
+async def api_set_policy(request: Request, user: str = Depends(require_user)):
+    body = await request.json()
+    policy = str(body.get("policy", "")).strip()
+    note = str(body.get("note", ""))
+    with get_db() as conn:
+        doc, err = set_policy(conn, policy, note, user)
+        view = policy_view(conn)
+    if err:
+        code, msg = err
+        return JSONResponse({"ok": False, "error": msg, **view}, status_code=code)
+    return {"ok": True, **view}
 
 
 @app.post("/api/pipelines/{pipeline_id}/extract")
 def api_extract(pipeline_id: int, user: str = Depends(require_user)):
     with get_db() as conn:
-        item = run_extract(conn, pipeline_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="管道不存在")
-    return item
+        item, err = run_extract(conn, pipeline_id, user)
+    return _gate_response(item, err)
+
+
+@app.post("/api/pipelines/{pipeline_id}/clean")
+async def api_clean(pipeline_id: int, request: Request, user: str = Depends(require_user)):
+    body = await request.json()
+    policy = str(body.get("policy", "")).strip()
+    mode = "reclean" if str(body.get("mode", "")) == "reclean" else "clean"
+    with get_db() as conn:
+        item, err = run_clean(conn, pipeline_id, policy, user, mode)
+    return _gate_response(item, err)
+
+
+@app.post("/api/pipelines/{pipeline_id}/rows/{row_id}/fix")
+async def api_fix_row(
+    pipeline_id: int, row_id: int, request: Request, user: str = Depends(require_user)
+):
+    body = await request.json()
+    title = str(body.get("title", ""))
+    raw_amount = body.get("amount", None)
+    amount = None
+    if raw_amount not in (None, ""):
+        try:
+            amount = float(raw_amount)
+        except (TypeError, ValueError):
+            return JSONResponse(
+                {"ok": False, "error": "金额格式不对"}, status_code=400
+            )
+    with get_db() as conn:
+        item, err = fix_row(conn, pipeline_id, row_id, title, amount, user)
+    return _gate_response(item, err)
 
 
 @app.post("/api/pipelines/{pipeline_id}/load")
 def api_load(pipeline_id: int, user: str = Depends(require_user)):
     with get_db() as conn:
-        item = run_load(conn, pipeline_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="管道不存在")
-    return item
+        item, err = run_load(conn, pipeline_id, user)
+    return _gate_response(item, err)
 
 
 def create_app() -> FastAPI:

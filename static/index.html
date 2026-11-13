@@ -14,7 +14,15 @@
       <span class="who">{{ me }}</span>
       <button class="ghost" @click="logout">退出</button>
     </header>
-    <p class="muted">基线能力：管道列表、抽取、落库。后续题面在此叠加增量水位、清洗规则、并发争用等。</p>
+    <p class="muted">清洗闸已串上：先抽取、再按口径清洗、过关才落库。脏数据怎么走由服务端裁定，页面只看闸口状态与隔离条数。</p>
+
+    <div class="strip">
+      <div class="stat"><b>{{ overview.pending }}</b><span>待清洗</span></div>
+      <div class="stat"><b>{{ overview.dropped }}</b><span>已丢弃</span></div>
+      <div class="stat"><b>{{ overview.quarantined }}</b><span>隔离中</span></div>
+      <div class="stat"><b>{{ policyName }}</b><span>口径名称</span></div>
+    </div>
+
     <div class="board">
       <section class="panel">
         <h2>管道列表</h2>
@@ -24,30 +32,110 @@
           :key="p.id"
           class="row"
           :class="{ active: current && current.id === p.id }"
-          @click="open(p.id)"
+          @click="select(p.id)"
         >
           <div>
             <div>{{ p.title }}</div>
             <div class="code">{{ p.code }} · {{ p.source_uri }}</div>
+            <div class="counts" v-if="p.extracted">
+              待清洗 {{ p.counts.pending_clean }} · 已丢弃 {{ p.counts.dropped }} · 隔离中 {{ p.counts.quarantined }}
+            </div>
           </div>
           <span class="tag" :class="tagClass(p.status)">{{ p.status }}</span>
         </div>
       </section>
+
       <section class="panel">
-        <h2>管道详情</h2>
-        <div v-if="!current" class="empty">点左侧一条查看抽取与落库状态</div>
+        <h2>清洗工作台</h2>
+        <div v-if="!current" class="empty">点左侧一条管道，抽取后过清洗闸</div>
         <template v-else>
           <p class="kv"><b>题名</b>{{ current.title }}</p>
           <p class="kv"><b>编码</b><span class="code">{{ current.code }}</span></p>
-          <p class="kv"><b>源地址</b><span class="code">{{ current.source_uri }}</span></p>
-          <p class="kv"><b>状态</b><span class="tag" :class="tagClass(current.status)">{{ current.status }}</span></p>
-          <p class="kv"><b>已抽取</b>{{ current.extracted }}</p>
-          <p class="kv"><b>已落库</b>{{ current.loaded }}</p>
+          <p class="kv"><b>闸口状态</b><span class="tag" :class="tagClass(current.status)">{{ current.status }}</span></p>
+          <p class="kv"><b>批次 / 抽取 / 落库</b>第 {{ current.batch }} 批 · {{ current.extracted }} / {{ current.loaded }}</p>
+          <p class="kv"><b>闸口计数</b>
+            待清洗 {{ current.counts.pending_clean }} · 已丢弃 {{ current.counts.dropped }} ·
+            隔离中 {{ current.counts.quarantined }} · 已补齐 {{ current.counts.fixed }} · 已清洗 {{ current.counts.cleaned }}
+          </p>
+          <p class="kv"><b>清洗口径</b>
+            <select v-model="cleanPolicy">
+              <option value="drop">空值丢弃</option>
+              <option value="quarantine">空值隔离</option>
+            </select>
+            <span class="muted">偏离说明口径会被闸口打回</span>
+          </p>
           <div class="actions">
             <button @click="extract" :disabled="busy">执行抽取</button>
+            <button @click="clean" :disabled="busy">
+              {{ current.status === '隔离待补齐' ? '补齐后再送清洗' : '执行清洗' }}
+            </button>
             <button class="ghost" @click="load" :disabled="busy">执行落库</button>
           </div>
-          <p v-if="msg" class="muted">{{ msg }}</p>
+          <p v-if="msg" class="gate-msg">{{ msg }}</p>
+        </template>
+      </section>
+
+      <section class="panel">
+        <h2>规则设置</h2>
+        <template v-if="policy">
+          <p class="kv"><b>口径名称</b>{{ policy.name }}</p>
+          <p class="kv"><b>写进日期</b>{{ policy.date }}</p>
+          <p class="kv"><b>说明</b>{{ policy.note || '（未填说明）' }}</p>
+          <p class="muted" v-if="policyLocked">口径已写进说明，全天不得改弦。</p>
+        </template>
+        <p v-else class="muted">口径未设置：先选口径写进说明，清洗闸才放行。</p>
+        <div v-if="!policyLocked" class="policy-form">
+          <label class="radio">
+            <input type="radio" value="drop" v-model="policyForm.policy" />
+            空值丢弃 —— 空值行直接丢掉并累计丢弃数
+          </label>
+          <label class="radio">
+            <input type="radio" value="quarantine" v-model="policyForm.policy" />
+            空值隔离 —— 空值行进隔离筐，补齐前禁止落库
+          </label>
+          <textarea v-model="policyForm.note" rows="2" placeholder="把口径写进说明，写进后全天不得改弦"></textarea>
+          <button @click="savePolicy" :disabled="busy">写进口径</button>
+        </div>
+        <p class="muted">脏数据口径：标题字段为空算脏数据；含空值的行按口径丢弃或进隔离筐。</p>
+        <p v-if="policyMsg" class="gate-msg">{{ policyMsg }}</p>
+      </section>
+
+      <section class="panel">
+        <h2>脏数据详情</h2>
+        <div v-if="!current" class="empty">点左侧一条管道看隔离与丢弃明细</div>
+        <template v-else>
+          <p class="muted">隔离原因与清洗争用失败都在这里看；隔离与丢弃分两栏，不会混。</p>
+          <h3>隔离筐（{{ current.quarantine.length }} 条）</h3>
+          <div v-if="!current.quarantine.length" class="empty">隔离筐是空的</div>
+          <div v-for="r in current.quarantine" :key="r.id" class="qrow">
+            <div class="qhead">
+              <span>#{{ r.row_no }}</span>
+              <span class="reason">隔离原因：{{ r.reason }}</span>
+              <span class="tag" :class="r.state === '隔离中' ? 'bad' : 'ok'">{{ r.state }}</span>
+            </div>
+            <div v-if="r.state === '隔离中'" class="fixline">
+              <input v-model="fixForms[r.id].title" placeholder="补齐标题（必填）" />
+              <input v-model="fixForms[r.id].amount" placeholder="补齐金额" class="amt" />
+              <button class="ghost" @click="fixRow(r)" :disabled="busy">补齐</button>
+            </div>
+            <div v-else class="muted">
+              已补齐：{{ r.title }}<span v-if="r.amount !== null"> · {{ r.amount }}</span>
+            </div>
+          </div>
+          <h3>已丢弃（{{ current.dropped_rows.length }} 条）</h3>
+          <div v-if="!current.dropped_rows.length" class="empty">没有丢弃行</div>
+          <div v-for="r in current.dropped_rows" :key="r.id" class="qrow dropped">
+            <span>#{{ r.row_no }}</span>
+            <span class="reason">丢弃原因：{{ r.reason }}</span>
+            <span class="tag">已丢弃</span>
+          </div>
+          <h3>清洗事件</h3>
+          <div v-if="!current.events.length" class="empty">暂无事件</div>
+          <div v-for="e in current.events" :key="e.id" class="evt">
+            <span class="tag" :class="evtClass(e.kind)">{{ e.kind }}</span>
+            <span>{{ e.detail }}</span>
+            <span class="muted">{{ e.operator }} · {{ e.created_at }}</span>
+          </div>
         </template>
       </section>
     </div>
